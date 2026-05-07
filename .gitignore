@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+
+profiles/chrome_cdp/
+profiles/chromium_user_data/
+
+reports/*.log
+reports/*.png
+reports/*.json
+
+.env
+.env.*

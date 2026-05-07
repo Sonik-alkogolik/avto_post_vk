@@ -1,0 +1,26 @@
+{
+  "profile_id": "second_group",
+  "name": "Вторая группа",
+  "url": "https://vk.com/your_second_group",
+  "image_path": "group_vk/second_group/img_post.jpg",
+  "post_text": "Текст поста для второй группы",
+  "selectors": {
+    "open_suggest_post_button": "[data-testid=\"group_publish_block\"] button",
+    "open_suggest_post_button_candidates": [
+      "[data-testid=\"group_publish_block\"] button",
+      "button[data-testid=\"group_publish_block_button\"]",
+      "button:has-text(\"Предложить пост\")",
+      "button:has-text(\"Предложить новость\")",
+      "[role=\"button\"]:has-text(\"Предложить\")"
+    ],
+    "posting_modal": "[data-testid=\"posting_modal_box\"]",
+    "file_input": "input[data-testid=\"posting_base_screen_download_from_device\"]",
+    "message_input": "[data-testid=\"posting_base_screen_input_message\"]",
+    "suggest_button": "button[data-testid=\"posting_suggest_button\"]"
+  },
+  "timeouts": {
+    "open_page_ms": 30000,
+    "element_ms": 20000,
+    "submit_ms": 60000
+  }
+}
