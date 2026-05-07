@@ -1,0 +1,26 @@
+{
+  "profile_id": "texnikadonetsk",
+  "name": "Барахолка ДНР | Бесплатные объявления Донецк",
+  "url": "https://vk.com/texnikadonetsk",
+  "image_path": "group_vk/baraholka/img_post.jpg",
+  "post_text": "— сварка изделий из металла под заказ\n— столы, стулья, тумбы из металла\n— изготовление по вашим размерам\n— покраска готовых изделий\n— готовые шаблоны и индивидуальные решения\nассортимент можно посмотреть в @svarka_dnr_bot",
+  "selectors": {
+    "open_suggest_post_button_candidates": [
+      "[data-testid=\"group_publish_block\"] button",
+      "button[data-testid=\"group_publish_block_button\"]",
+      "button:has-text(\"Предложить пост\")",
+      "button:has-text(\"Предложить новость\")",
+      "[role=\"button\"]:has-text(\"Предложить\")"
+    ],
+    "posting_modal": "[data-testid=\"posting_modal_box\"]",
+    "file_input": "input[data-testid=\"posting_base_screen_download_from_device\"]",
+    "open_suggest_post_button": "[data-testid=\"group_publish_block\"] button",
+    "message_input": "[data-testid=\"posting_base_screen_input_message\"]",
+    "suggest_button": "button[data-testid=\"posting_suggest_button\"]"
+  },
+  "timeouts": {
+    "element_ms": 20000,
+    "open_page_ms": 30000,
+    "submit_ms": 60000
+  }
+}
