@@ -50,48 +50,6 @@ python src/web_ui.py
 
 В UI оставьте включённым чекбокс `Использовать уже открытый браузер (CDP)` и URL `http://127.0.0.1:9222`.
 
-## Telegram-бот как свой "Claude Code"
-
-Можно поднять простой мост: Telegram -> OpenAI API -> Telegram.
-
-### 1) Подготовка
-
-- Создайте бота через `@BotFather` и получите токен.
-- Подготовьте `OPENAI_API_KEY`.
-- Узнайте ваш `chat_id` (необязательно, но рекомендуется для ограничения доступа).
-
-### 2) Переменные окружения (PowerShell)
-
-```powershell
-$env:TELEGRAM_BOT_TOKEN="123456:telegram_token"
-$env:OPENAI_API_KEY="sk-..."
-$env:OPENAI_MODEL="gpt-5.4-mini"
-$env:TELEGRAM_ALLOWED_CHAT_ID="123456789"
-$env:TELEGRAM_HISTORY_LIMIT="8"
-```
-
-`TELEGRAM_ALLOWED_CHAT_ID` можно не задавать, тогда бот ответит любому чату.
-Также можно использовать шаблон `.env.telegram.example`.
-
-### 3) Запуск
-
-```bash
-python src/telegram_openai_bridge.py
-```
-
-После запуска отправьте вашему боту сообщение в Telegram: он примет текст и вернёт ответ модели.
-
-### Команды бота
-
-- `/help` или `/start` — подсказка
-- `/status` — текущая модель и состояние памяти
-- `/reset` — очистка памяти диалога
-
-### Что фиксируется
-
-- История диалога: `reports/telegram_bridge_state.json`
-- Логи работы: `reports/telegram_bridge.log`
-
 ## Runbook: быстрый запуск без потерь времени
 
 Этот раздел фиксирует рабочий порядок запуска и типичные ограничения, которые уже встретились.
@@ -158,33 +116,8 @@ python src/run_vk_post.py --profile profiles/baraholka_dnr.json --no-submit --us
 python src/run_vk_post.py --profile profiles/baraholka_dnr.json --use-existing-browser --cdp-url http://127.0.0.1:9222
 ```
 
-### 6) Telegram-бот (ассистент)
+### 6) Ограничения и частые сбои
 
-Обязательные переменные:
-
-```powershell
-$env:TELEGRAM_BOT_TOKEN="..."
-$env:OPENAI_API_KEY="..."
-```
-
-Опционально:
-
-```powershell
-$env:OPENAI_MODEL="gpt-5.4-mini"
-$env:TELEGRAM_ALLOWED_CHAT_ID="123456789"
-$env:TELEGRAM_HISTORY_LIMIT="8"
-```
-
-Запуск:
-
-```bash
-python src/telegram_openai_bridge.py
-```
-
-### 7) Ограничения и частые сбои
-
-- `Missing env vars: TELEGRAM_BOT_TOKEN, OPENAI_API_KEY`  
-  Причина: не заданы переменные для бота.
 - `connect ECONNREFUSED 127.0.0.1:9222`  
   Причина: Chrome не запущен с `--remote-debugging-port=9222`.
 - `Cannot click any candidate selector ... Предложить пост`  
@@ -192,8 +125,7 @@ python src/telegram_openai_bridge.py
 - `PermissionError: [WinError 5] Отказано в доступе` при Playwright  
   Причина: ограничения среды выполнения; запускать команду вне sandbox/с нужными правами.
 
-### 8) Артефакты диагностики
+### 7) Артефакты диагностики
 
 - Ошибки UI: `reports/ui.out.log`, `reports/ui.err.log`, `reports/web_ui.out.log`, `reports/web_ui.err.log`
 - Ошибки VK сценария: `reports/vk_error_generic.png`, `reports/vk_error_timeout.png`
-- Логи бота: `reports/telegram_bridge.log`
