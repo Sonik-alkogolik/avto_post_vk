@@ -257,6 +257,8 @@ def run(
                         'button[data-testid="group_publish_block_button"]',
                         'button:has-text("Предложить пост")',
                         'button:has-text("Предложить новость")',
+                        'button:has-text("Создать")',
+                        '[role="button"]:has-text("Создать")',
                         '[role="button"]:has-text("Предложить новость")',
                         'button:has-text("Предложить")',
                         '[role="button"]:has-text("Предложить")',
