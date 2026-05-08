@@ -149,6 +149,13 @@ def format_post_message(profile_name: str, post: dict[str, str]) -> str:
     )
 
 
+def matches_keywords(post: dict[str, str], keywords: list[str]) -> bool:
+    if not keywords:
+        return True
+    haystack = f"{post.get('group_title', '')}\n{post.get('text', '')}".lower()
+    return any(kw in haystack for kw in keywords)
+
+
 def monitor_once(
     profiles: list[dict[str, str]],
     cdp_url: str,
@@ -157,6 +164,7 @@ def monitor_once(
     dry_run: bool,
     max_posts_per_group: int,
     per_group_wait_seconds: int,
+    filter_keywords: list[str],
     log: Callable[[str], None],
 ) -> tuple[int, int]:
     state = load_state()
@@ -215,6 +223,14 @@ def monitor_once(
                         log("No new posts")
                         continue
 
+                    if filter_keywords:
+                        before = len(group_new)
+                        group_new = [p for p in group_new if matches_keywords(p, filter_keywords)]
+                        log(f"Filter matched: {len(group_new)}/{before}")
+                        if not group_new:
+                            log("No new posts matched the active filter")
+                            continue
+
                     log(f"New posts: {len(group_new)}")
                     new_count += len(group_new)
                     for post in reversed(group_new):
@@ -251,6 +267,7 @@ def monitor_loop(
     per_group_wait_seconds: int,
     cycles: int,
     max_posts_per_group: int,
+    filter_keywords: list[str],
     log: Callable[[str], None],
 ) -> None:
     total_new = 0
@@ -265,6 +282,7 @@ def monitor_loop(
             dry_run=dry_run,
             max_posts_per_group=max_posts_per_group,
             per_group_wait_seconds=per_group_wait_seconds,
+            filter_keywords=filter_keywords,
             log=log,
         )
         total_new += new_count

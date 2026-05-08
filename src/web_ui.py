@@ -16,6 +16,44 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 PROFILES_DIR = REPO_ROOT / "profiles"
 VK_FEED_STATE_PATH = REPO_ROOT / "reports" / "vk_feed_state.json"
 ENV_PATH = REPO_ROOT / ".env"
+FILTERS_PATH = REPO_ROOT / "reports" / "monitor_filters.json"
+
+DEFAULT_AUTO_KEYWORDS = [
+    "авто",
+    "автомобиль",
+    "машина",
+    "продам авто",
+    "продам машину",
+    "продам автомобиль",
+    "куплю авто",
+    "авто с пробегом",
+    "обмен авто",
+    "птс",
+    "vin",
+    "внедорожник",
+    "седан",
+    "хэтчбек",
+    "универсал",
+    "кроссовер",
+    "пикап",
+    "электромобиль",
+    "toyota",
+    "honda",
+    "bmw",
+    "mercedes",
+    "audi",
+    "ford",
+    "kia",
+    "hyundai",
+    "lada",
+    "ваз",
+    "nissan",
+    "renault",
+    "mitsubishi",
+    "volkswagen",
+    "skoda",
+    "opel",
+]
 
 
 def load_local_env_file() -> None:
@@ -34,6 +72,74 @@ def load_local_env_file() -> None:
     except Exception:
         # UI should keep working even if .env has a malformed line.
         pass
+
+
+def parse_keywords(raw: str) -> list[str]:
+    items = []
+    for line in raw.replace(",", "\n").splitlines():
+        kw = line.strip().lower()
+        if kw:
+            items.append(kw)
+    uniq = []
+    seen = set()
+    for kw in items:
+        if kw not in seen:
+            seen.add(kw)
+            uniq.append(kw)
+    return uniq
+
+
+def load_filters() -> dict[str, list[str]]:
+    if not FILTERS_PATH.exists():
+        return {}
+    try:
+        data = json.loads(FILTERS_PATH.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return {}
+        out: dict[str, list[str]] = {}
+        for k, v in data.items():
+            if isinstance(k, str) and isinstance(v, list):
+                out[k] = [str(x).lower() for x in v if str(x).strip()]
+        return out
+    except Exception:
+        return {}
+
+
+def save_filters(filters: dict[str, list[str]]) -> None:
+    FILTERS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    FILTERS_PATH.write_text(json.dumps(filters, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def ensure_default_filters() -> None:
+    filters = load_filters()
+    if "авто" not in filters:
+        filters["авто"] = DEFAULT_AUTO_KEYWORDS
+        save_filters(filters)
+
+
+def filter_choices() -> list[str]:
+    return ["(без фильтра)"] + sorted(load_filters().keys())
+
+
+def get_filter_keywords_preview(filter_name: str) -> str:
+    if not filter_name or filter_name == "(без фильтра)":
+        return ""
+    return ", ".join(load_filters().get(filter_name, []))
+
+
+def save_filter_ui(filter_name: str, keywords_raw: str):
+    name = (filter_name or "").strip()
+    if not name:
+        return "Введите имя фильтра.", gr.update(), gr.update()
+    kws = parse_keywords(keywords_raw)
+    filters = load_filters()
+    filters[name] = kws
+    save_filters(filters)
+    return (
+        f"Фильтр '{name}' сохранён. Ключевых слов: {len(kws)}",
+        gr.update(choices=filter_choices(), value=name),
+        gr.update(value=", ".join(kws)),
+    )
 
 
 def list_profiles() -> list[str]:
@@ -158,6 +264,7 @@ def execute_monitor_to_telegram(
     max_posts_per_group: int,
     telegram_token: str,
     telegram_chat_id: str,
+    filter_name: str,
     dry_run: bool,
     cdp_url: str,
 ) -> str:
@@ -185,12 +292,17 @@ def execute_monitor_to_telegram(
     per_group_wait_seconds = max(0, int(per_group_wait_minutes * 60))
     safe_cycles = max(1, int(cycles))
     safe_max_posts = max(1, int(max_posts_per_group))
+    active_keywords: list[str] = []
+    if filter_name and filter_name != "(без фильтра)":
+        active_keywords = load_filters().get(filter_name, [])
     logs.append(f"Profiles: {len(profiles)}")
     logs.append(f"Dry-run: {dry_run}")
     logs.append(f"Interval: {interval_seconds} sec")
     logs.append(f"Per-group wait: {per_group_wait_seconds} sec")
     logs.append(f"Cycles: {safe_cycles}")
     logs.append(f"Max posts/group: {safe_max_posts}")
+    logs.append(f"Filter: {filter_name if filter_name else '(без фильтра)'}")
+    logs.append(f"Filter keywords: {len(active_keywords)}")
     logs.append("")
     yield "\n".join(logs)
 
@@ -209,6 +321,7 @@ def execute_monitor_to_telegram(
                 per_group_wait_seconds=per_group_wait_seconds,
                 cycles=safe_cycles,
                 max_posts_per_group=safe_max_posts,
+                filter_keywords=active_keywords,
                 log=lambda line: q.put(line),
             )
         except Exception:
@@ -241,6 +354,7 @@ def execute_monitor_once_stream(
     max_posts_per_group: int,
     telegram_token: str,
     telegram_chat_id: str,
+    filter_name: str,
     cdp_url: str,
 ):
     yield from execute_monitor_to_telegram(
@@ -250,6 +364,7 @@ def execute_monitor_once_stream(
         max_posts_per_group=max_posts_per_group,
         telegram_token=telegram_token,
         telegram_chat_id=telegram_chat_id,
+        filter_name=filter_name,
         dry_run=False,
         cdp_url=cdp_url,
     )
@@ -262,6 +377,7 @@ def execute_monitor_loop_stream(
     max_posts_per_group: int,
     telegram_token: str,
     telegram_chat_id: str,
+    filter_name: str,
     cdp_url: str,
 ):
     yield from execute_monitor_to_telegram(
@@ -271,6 +387,7 @@ def execute_monitor_loop_stream(
         max_posts_per_group=max_posts_per_group,
         telegram_token=telegram_token,
         telegram_chat_id=telegram_chat_id,
+        filter_name=filter_name,
         dry_run=False,
         cdp_url=cdp_url,
     )
@@ -293,6 +410,7 @@ if default_profile:
     default_name, default_image, default_text = profile_details(default_profile)
 
 load_local_env_file()
+ensure_default_filters()
 default_tg_token = os.getenv(
     "TELEGRAM_BOT_TOKEN",
     "8599498074:AAH5jvqV3ZZYux3J-j0t16jFeJmbGRIhn7s",
@@ -331,6 +449,24 @@ with gr.Blocks(title="VK Auto Post") as demo:
             cdp_url_monitor_tb = gr.Textbox(label="CDP URL", value="http://127.0.0.1:9222")
             tg_token_tb = gr.Textbox(label="TELEGRAM_BOT_TOKEN", value=default_tg_token, type="password")
             tg_chat_id_tb = gr.Textbox(label="TELEGRAM_CHAT_ID", value=default_tg_chat_id)
+            monitor_filter_dd = gr.Dropdown(
+                choices=filter_choices(),
+                value="авто" if "авто" in filter_choices() else "(без фильтра)",
+                label="Активный фильтр",
+            )
+            filter_keywords_preview_tb = gr.Textbox(
+                label="Ключевые слова активного фильтра",
+                interactive=False,
+                value=get_filter_keywords_preview("авто"),
+            )
+            with gr.Row():
+                new_filter_name_tb = gr.Textbox(label="Имя фильтра", value="авто")
+                new_filter_keywords_tb = gr.Textbox(
+                    label="Ключевые слова (через запятую или с новой строки)",
+                    value=", ".join(DEFAULT_AUTO_KEYWORDS),
+                    lines=3,
+                )
+            save_filter_btn = gr.Button("Сохранить фильтр", variant="secondary")
             with gr.Row():
                 monitor_interval_nb = gr.Number(label="Интервал мониторинга (мин)", value=5, minimum=0, precision=1)
                 monitor_per_group_wait_nb = gr.Number(
@@ -385,6 +521,7 @@ with gr.Blocks(title="VK Auto Post") as demo:
             monitor_max_posts_nb,
             tg_token_tb,
             tg_chat_id_tb,
+            monitor_filter_dd,
             cdp_url_monitor_tb,
         ],
         outputs=[logs_tb],
@@ -399,9 +536,22 @@ with gr.Blocks(title="VK Auto Post") as demo:
             monitor_max_posts_nb,
             tg_token_tb,
             tg_chat_id_tb,
+            monitor_filter_dd,
             cdp_url_monitor_tb,
         ],
         outputs=[logs_tb],
+    )
+
+    monitor_filter_dd.change(
+        fn=get_filter_keywords_preview,
+        inputs=[monitor_filter_dd],
+        outputs=[filter_keywords_preview_tb],
+    )
+
+    save_filter_btn.click(
+        fn=save_filter_ui,
+        inputs=[new_filter_name_tb, new_filter_keywords_tb],
+        outputs=[logs_tb, monitor_filter_dd, filter_keywords_preview_tb],
     )
 
     clear_state_btn.click(
