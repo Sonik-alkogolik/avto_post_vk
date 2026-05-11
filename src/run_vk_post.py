@@ -15,6 +15,7 @@ REQUIRED_SELECTOR_KEYS = (
     "message_input",
     "suggest_button",
 )
+JOIN_COOLDOWN_SECONDS = 300
 
 
 def save_screenshot_safe(page, screenshot_path: Path, logger: Callable[[str], None]) -> None:
@@ -76,8 +77,10 @@ def resolve_image_path(repo_root: Path, image_path: str) -> Path:
 
 def click_first_available(page, selector_candidates: list[str], timeout_ms: int, logger: Callable[[str], None]) -> None:
     last_error: Exception | None = None
+    logger(f"[debug] click_first_available: candidates={len(selector_candidates)}, timeout_ms={timeout_ms}")
     for candidate in selector_candidates:
         try:
+            logger(f"[debug] try selector: {candidate}")
             locator = page.locator(candidate).first
             locator.wait_for(state="visible", timeout=timeout_ms)
             locator.click(timeout=timeout_ms)
@@ -85,7 +88,7 @@ def click_first_available(page, selector_candidates: list[str], timeout_ms: int,
             return
         except Exception as exc:  # noqa: BLE001
             last_error = exc
-            logger(f"Selector not ready: {candidate}")
+            logger(f"[debug] selector failed: {candidate} | {exc}")
     raise RuntimeError(f"Cannot click any candidate selector: {selector_candidates}") from last_error
 
 
@@ -97,21 +100,26 @@ def click_first_available_with_retries(
     retries: int = 3,
 ) -> None:
     last_error: Exception | None = None
+    logger(f"[debug] click_first_available_with_retries: retries={retries}, timeout_ms={timeout_ms}")
     for attempt in range(1, retries + 1):
         try:
-            click_first_available(page, selector_candidates, timeout_ms, logger)
+            logger(f"[debug] open-click attempt {attempt}/{retries}")
+            per_selector_timeout_ms = max(1200, min(3500, timeout_ms // max(1, len(selector_candidates))))
+            click_first_available(page, selector_candidates, per_selector_timeout_ms, logger)
             return
         except Exception as exc:  # noqa: BLE001
             last_error = exc
-            logger(f"Open button attempt {attempt}/{retries} failed")
+            logger(f"[debug] open-click attempt failed {attempt}/{retries}: {exc}")
             if attempt < retries:
                 page.wait_for_timeout(1200)
+                logger("[debug] reload before retry open-click")
                 page.reload(wait_until="domcontentloaded", timeout=max(30000, timeout_ms))
                 page.wait_for_timeout(1800)
     raise RuntimeError("Failed to click open suggest post button after retries") from last_error
 
 
 def click_when_ready(page, selector: str, timeout_ms: int, logger: Callable[[str], None]) -> None:
+    logger(f"[debug] click_when_ready: {selector}")
     locator = page.locator(selector).first
     locator.wait_for(state="visible", timeout=timeout_ms)
     page.wait_for_function(
@@ -129,6 +137,7 @@ def click_when_ready(page, selector: str, timeout_ms: int, logger: Callable[[str
 
 def click_testid_when_ready(page, testid: str, timeout_ms: int, logger: Callable[[str], None]) -> bool:
     try:
+        logger(f"[debug] click_testid_when_ready: {testid}")
         locator = page.get_by_test_id(testid).first
         locator.wait_for(state="visible", timeout=timeout_ms)
         try:
@@ -151,6 +160,7 @@ def click_modal_primary_button(page, posting_modal_selector: str, timeout_ms: in
     ]
     for selector in candidates:
         try:
+            logger(f"[debug] modal primary candidate: {selector}")
             locator = page.locator(selector).last
             locator.wait_for(state="visible", timeout=timeout_ms)
             locator.click(timeout=timeout_ms)
@@ -167,13 +177,197 @@ def click_first_ready_candidate(
     timeout_ms: int,
     logger: Callable[[str], None],
 ) -> bool:
+    logger(f"[debug] click_first_ready_candidate: candidates={len(selector_candidates)}")
     for candidate in selector_candidates:
         try:
             click_when_ready(page, candidate, timeout_ms, logger)
             return True
         except Exception:  # noqa: BLE001
-            logger(f"Candidate not ready yet: {candidate}")
+            logger(f"[debug] candidate not ready: {candidate}")
     return False
+
+
+def try_join_community(page, timeout_ms: int, logger: Callable[[str], None]) -> bool:
+    join_candidates = [
+        'button[data-testid="group-subscribe-button"]',
+        '[data-testid="group-subscribe-button"]',
+        'button:has-text("Вступить")',
+        '[role="button"]:has-text("Вступить")',
+        'button:has-text("Подписаться")',
+        '[role="button"]:has-text("Подписаться")',
+        'button[data-testid*="join"]',
+        '[data-testid*="join"] button',
+    ]
+    # First try exact VK test-id path that user provided.
+    try:
+        logger("[debug] try direct subscribe by data-testid")
+        locator = page.get_by_test_id("group-subscribe-button").first
+        locator.wait_for(state="visible", timeout=timeout_ms)
+        locator.scroll_into_view_if_needed(timeout=timeout_ms)
+        try:
+            locator.click(timeout=timeout_ms)
+        except Exception:
+            locator.click(timeout=timeout_ms, force=True)
+        logger("Joined/subscribed using get_by_test_id(group-subscribe-button)")
+        page.wait_for_timeout(2000)
+        return True
+    except Exception:  # noqa: BLE001
+        logger("[debug] direct subscribe by test-id failed, trying fallback selectors")
+
+    for candidate in join_candidates:
+        try:
+            logger(f"[debug] try join selector: {candidate}")
+            locator = page.locator(candidate).first
+            locator.wait_for(state="visible", timeout=timeout_ms)
+            locator.scroll_into_view_if_needed(timeout=timeout_ms)
+            try:
+                locator.click(timeout=timeout_ms)
+            except Exception:
+                locator.click(timeout=timeout_ms, force=True)
+            logger(f"Joined/subscribed using selector: {candidate}")
+            page.wait_for_timeout(1500)
+            return True
+        except Exception:  # noqa: BLE001
+            logger(f"[debug] join selector failed: {candidate}")
+            continue
+    logger("Join/subscribe button was not found")
+    return False
+
+
+def has_existing_suggested_post(page, logger: Callable[[str], None]) -> bool:
+    # Fast-path by explicit VK test ids.
+    try:
+        btn = page.get_by_test_id("group_unpublished_button").first
+        if btn.count() > 0 and btn.is_visible():
+            logger("[debug] detected group_unpublished_button (suggested post already exists)")
+            return True
+    except Exception as exc:  # noqa: BLE001
+        logger(f"[debug] check group_unpublished_button failed: {exc}")
+
+    # Fallback for layout/AB variations: check any visible suggested-link UI markers.
+    try:
+        detected = page.evaluate(
+            """() => {
+              const nodes = Array.from(document.querySelectorAll('a, button, [role="button"]'));
+              for (const el of nodes) {
+                const txt = (el.textContent || '').toLowerCase();
+                const href = (el.getAttribute('href') || '').toLowerCase();
+                const testid = (el.getAttribute('data-testid') || '').toLowerCase();
+                const hasSuggestedWord = txt.includes('предложенн');
+                const hasSuggestedHref = href.includes('suggested=1');
+                const hasSuggestedTestid = testid.includes('group_unpublished');
+                if ((hasSuggestedWord && hasSuggestedHref) || hasSuggestedTestid) {
+                  return true;
+                }
+              }
+              // Counter itself can be present even if parent wasn't matched above.
+              const counter = document.querySelector('[data-testid="group_unpublished_counter"]');
+              if (counter) {
+                const n = parseInt((counter.textContent || '').trim(), 10);
+                if (!Number.isNaN(n) && n > 0) return true;
+              }
+              return false;
+            }"""
+        )
+        if bool(detected):
+            logger("[debug] detected existing suggested marker via fallback DOM scan")
+            return True
+    except Exception as exc:  # noqa: BLE001
+        logger(f"[debug] fallback suggested-marker scan failed: {exc}")
+    return False
+
+
+def should_skip_due_to_existing_suggested(page, logger: Callable[[str], None]) -> bool:
+    # Retry because VK may render counters/buttons asynchronously.
+    for attempt in range(1, 4):
+        if has_existing_suggested_post(page, logger):
+            logger(f"[debug] suggested marker detected on attempt {attempt}/3")
+            return True
+        logger(f"[debug] no suggested marker on attempt {attempt}/3")
+        page.wait_for_timeout(900)
+    return False
+
+
+def dismiss_unsaved_changes_dialog(page, logger: Callable[[str], None]) -> bool:
+    candidates = [
+        'button:has-text("Выйти без сохранения")',
+        '[role="button"]:has-text("Выйти без сохранения")',
+    ]
+    for sel in candidates:
+        try:
+            loc = page.locator(sel).first
+            if loc.count() > 0 and loc.is_visible():
+                loc.click(timeout=5000)
+                logger("[debug] unsaved-changes dialog dismissed")
+                page.wait_for_timeout(600)
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def normalize_text(value: str) -> str:
+    return " ".join((value or "").replace("\u00a0", " ").split())
+
+
+def set_post_text_strict(page, selector: str, text: str, timeout_ms: int, logger: Callable[[str], None]) -> None:
+    target_norm = normalize_text(text)
+    last_seen = ""
+    for attempt in range(1, 4):
+        logger(f"[debug] fill post text attempt {attempt}/3")
+        loc = page.locator(selector).first
+        loc.wait_for(state="visible", timeout=timeout_ms)
+        loc.click(timeout=timeout_ms)
+        try:
+            loc.fill(text, timeout=timeout_ms)
+        except Exception:
+            # Fallback for non-input editable nodes.
+            page.keyboard.press("Control+A")
+            page.keyboard.press("Backspace")
+            loc.type(text, delay=12, timeout=timeout_ms)
+
+        page.wait_for_timeout(200)
+        try:
+            current = page.evaluate(
+                """(sel) => {
+                  const el = document.querySelector(sel);
+                  if (!el) return '';
+                  const anyEl = el;
+                  if (typeof anyEl.value === 'string') return anyEl.value;
+                  return (anyEl.innerText || anyEl.textContent || '').trim();
+                }""",
+                selector,
+            )
+        except Exception:
+            current = ""
+        last_seen = str(current)
+        if normalize_text(last_seen) == target_norm:
+            logger(f"[debug] post text verified, len={len(last_seen)}")
+            return
+
+        logger("[debug] post text mismatch after fill, retrying...")
+        # Hard fallback: set textContent/value via JS and dispatch input.
+        page.evaluate(
+            """([sel, val]) => {
+              const el = document.querySelector(sel);
+              if (!el) return;
+              if ('value' in el) {
+                el.value = val;
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                return;
+              }
+              el.textContent = val;
+              el.dispatchEvent(new Event('input', { bubbles: true }));
+            }""",
+            [selector, text],
+        )
+        page.wait_for_timeout(250)
+
+    raise RuntimeError(
+        "Post text did not match template after retries. "
+        f"Expected len={len(text)}, seen preview={last_seen[:160]!r}"
+    )
 
 
 def run(
@@ -190,6 +384,9 @@ def run(
     keep_browser_open: bool = True,
     user_data_dir: str = "profiles/chromium_user_data",
     submit_from_open_modal: bool = False,
+    auto_join_before_post: bool = False,
+    join_cooldown_seconds: int = JOIN_COOLDOWN_SECONDS,
+    skip_if_unpublished_exists: bool = False,
 ) -> None:
     repo_root = Path(__file__).resolve().parent.parent
     profile = load_profile(profile_path)
@@ -207,6 +404,12 @@ def run(
     image_path = resolve_image_path(repo_root, profile_image_path)
     if not image_path.exists():
         raise FileNotFoundError(f"Image file not found: {image_path}")
+
+    logger(
+        "[debug] run params: "
+        f"headless={headless}, submit_post={submit_post}, use_existing_browser={use_existing_browser}, "
+        f"auto_join_before_post={auto_join_before_post}, join_cooldown_seconds={join_cooldown_seconds}"
+    )
 
     with sync_playwright() as p:
         owns_browser = True
@@ -241,6 +444,8 @@ def run(
                 logger(f"[1/7] Open: {profile['url']}")
                 page.goto(profile["url"], wait_until="domcontentloaded", timeout=open_page_ms)
                 page.wait_for_timeout(1500)
+                logger("[debug] page opened and initial wait done")
+                dismiss_unsaved_changes_dialog(page, logger)
                 if wait_for_manual_login:
                     input(
                         "\nВыполните ручной вход в VK в открытом окне браузера, затем нажмите Enter для продолжения...\n"
@@ -255,6 +460,8 @@ def run(
                 open_candidates.extend(
                     [
                         'button[data-testid="group_publish_block_button"]',
+                        '[data-testid="group_publish_block_button"]',
+                        '[data-testid="group_publish_block"] button',
                         'button:has-text("Предложить пост")',
                         'button:has-text("Предложить новость")',
                         'button:has-text("Создать")',
@@ -266,19 +473,78 @@ def run(
                         '[data-testid="group_publish_block"] :text("Предложить пост")',
                     ]
                 )
-                click_first_available_with_retries(page, open_candidates, element_ms, logger, retries=3)
+                if auto_join_before_post:
+                    logger("[debug] auto-join enabled: trying subscribe click before searching suggest-post button")
+                    joined = try_join_community(page, min(element_ms, 8000), logger)
+                    if joined:
+                        cooldown = max(0, int(join_cooldown_seconds))
+                        logger(
+                            f"Auto-join completed. Waiting {cooldown} sec before retry "
+                            "to reduce captcha/anti-spam risk..."
+                        )
+                        page.wait_for_timeout(cooldown * 1000)
+                        logger("Reload page after auto-join")
+                        page.reload(wait_until="domcontentloaded", timeout=max(30000, open_page_ms))
+                        page.wait_for_timeout(1800)
+                        logger("[debug] page reloaded after join")
+                        dismiss_unsaved_changes_dialog(page, logger)
+
+                # Skip-check is intentionally after auto-join attempt.
+                if skip_if_unpublished_exists and should_skip_due_to_existing_suggested(page, logger):
+                    logger("Skip posting: existing suggested post detected in group")
+                    return
+
+                try:
+                    click_first_available_with_retries(page, open_candidates, element_ms, logger, retries=3)
+                except Exception as open_exc:
+                    if not auto_join_before_post:
+                        raise
+                    logger(f"[debug] suggest-post button still unavailable after auto-join flow: {open_exc}")
+                    raise
                 human_pause(page)
 
                 logger("[3/7] Wait posting modal")
-                page.locator(selectors["posting_modal"]).wait_for(state="visible", timeout=element_ms)
+                posting_modal_candidates = [
+                    selectors["posting_modal"],
+                    '[data-testid="posting_modal_box"]',
+                    '[data-testid="posting_box"]',
+                    '[role="dialog"]',
+                ]
+                posting_modal_visible = False
+                last_modal_exc: Exception | None = None
+                for modal_sel in posting_modal_candidates:
+                    try:
+                        logger(f"[debug] wait posting modal candidate: {modal_sel}")
+                        page.locator(modal_sel).first.wait_for(state="visible", timeout=min(element_ms, 9000))
+                        selectors["posting_modal"] = modal_sel
+                        posting_modal_visible = True
+                        logger(f"[debug] posting modal is visible via: {modal_sel}")
+                        break
+                    except Exception as modal_exc:  # noqa: BLE001
+                        last_modal_exc = modal_exc
+                        continue
+
+                if not posting_modal_visible:
+                    # Some groups switch UI state after clicking suggest; re-check skip markers before failing.
+                    if skip_if_unpublished_exists and should_skip_due_to_existing_suggested(page, logger):
+                        logger("Skip posting after click: existing suggested post detected in group")
+                        dismiss_unsaved_changes_dialog(page, logger)
+                        return
+                    raise RuntimeError(f"Posting modal was not found after click: {last_modal_exc}")
+
+                if skip_if_unpublished_exists and should_skip_due_to_existing_suggested(page, logger):
+                    logger("Skip posting in modal: existing suggested post detected in group")
+                    dismiss_unsaved_changes_dialog(page, logger)
+                    return
                 human_pause(page)
 
                 logger(f"[4/7] Upload image: {image_path}")
                 page.locator(selectors["file_input"]).first.set_input_files(str(image_path), timeout=element_ms)
+                logger("[debug] image upload triggered")
                 human_pause(page, 300, 800)
 
                 logger("[5/7] Fill post text")
-                page.locator(selectors["message_input"]).first.fill(profile_post_text, timeout=element_ms)
+                set_post_text_strict(page, selectors["message_input"], profile_post_text, element_ms, logger)
                 human_pause(page, 250, 700)
             else:
                 logger("[1/7] Submit mode from already opened modal")
@@ -303,6 +569,7 @@ def run(
                 if not clicked_next and click_first_ready_candidate(page, next_candidates, short_wait_ms, logger):
                     clicked_next = True
                 if clicked_next:
+                    logger("[debug] intermediate 'Next' click succeeded")
                     human_pause(page, 300, 700)
 
                 suggest_candidates = [
@@ -396,6 +663,17 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip open/fill and only click Next/Submit in already opened posting modal",
     )
+    parser.add_argument(
+        "--auto-join-before-post",
+        action="store_true",
+        help="Try joining/subscribing to community if suggest-post button is not available",
+    )
+    parser.add_argument(
+        "--join-cooldown-seconds",
+        type=int,
+        default=JOIN_COOLDOWN_SECONDS,
+        help="Cooldown after successful join/subscribe before retrying post flow",
+    )
     return parser.parse_args()
 
 
@@ -411,4 +689,6 @@ if __name__ == "__main__":
         keep_browser_open=not args.close_browser,
         user_data_dir=args.user_data_dir,
         submit_from_open_modal=args.submit_from_open_modal,
+        auto_join_before_post=args.auto_join_before_post,
+        join_cooldown_seconds=args.join_cooldown_seconds,
     )
