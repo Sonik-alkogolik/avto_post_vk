@@ -41,18 +41,27 @@ if ($existingPid) {
         Start-Sleep -Milliseconds 700
     }
     catch {
-        Write-Error "Failed to stop existing PID ${existingPid}: $($_.Exception.Message)"
+        Write-Warning "Failed to stop existing PID ${existingPid}: $($_.Exception.Message)"
+        Write-Host "UI is already running on http://$BindHost`:$Port (PID $existingPid)."
+        try {
+            Start-Process "http://$BindHost`:$Port" | Out-Null
+        }
+        catch {
+            Write-Warning "UI is running, but failed to open browser automatically: $($_.Exception.Message)"
+        }
+        exit 0
     }
 }
 
 if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
     Write-Error "Python not found in PATH."
 }
+$pythonExe = (Get-Command python -ErrorAction Stop).Source
 
 New-Item -ItemType Directory -Force -Path (Join-Path $repoRoot "reports") | Out-Null
 
 $startInfo = @{
-    FilePath = "python"
+    FilePath = $pythonExe
     ArgumentList = @("-u", "src/web_ui.py")
     WorkingDirectory = $repoRoot
     RedirectStandardOutput = $outLog
@@ -90,3 +99,29 @@ Write-Host "UI started: http://$BindHost`:$Port (PID $newPid)"
 Write-Host "Logs:"
 Write-Host "  $outLog"
 Write-Host "  $errLog"
+
+# Wait until HTTP endpoint is actually ready, not just LISTENING socket.
+$uiReady = $false
+for ($i = 0; $i -lt 20; $i++) {
+    try {
+        $resp = Invoke-WebRequest -Uri "http://$BindHost`:$Port/" -UseBasicParsing -TimeoutSec 2
+        if ($resp.StatusCode -eq 200) {
+            $uiReady = $true
+            break
+        }
+    }
+    catch {
+        Start-Sleep -Milliseconds 500
+    }
+}
+
+if (-not $uiReady) {
+    Write-Warning "UI process is running, but HTTP endpoint is not ready yet."
+}
+
+try {
+    Start-Process "http://$BindHost`:$Port" | Out-Null
+}
+catch {
+    Write-Warning "UI started, but failed to open browser automatically: $($_.Exception.Message)"
+}

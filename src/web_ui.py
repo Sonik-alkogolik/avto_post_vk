@@ -6,6 +6,7 @@ import os
 import queue
 import threading
 import re
+from datetime import datetime, timedelta, timezone
 
 import gradio as gr
 
@@ -221,6 +222,19 @@ def load_v2_loop_state() -> dict:
 def save_v2_loop_state(state: dict) -> None:
     V2_LOOP_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     V2_LOOP_STATE_PATH.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def parse_iso_datetime(value: str) -> datetime | None:
+    try:
+        if not value:
+            return None
+        return datetime.fromisoformat(value)
+    except Exception:
+        return None
 
 
 def slugify_name(value: str) -> str:
@@ -453,6 +467,7 @@ def execute_v2_loop_stream(
     auto_join_before_post: bool,
     join_cooldown_minutes: float,
     skip_if_unpublished_exists: bool,
+    reprocess_window_days: float,
 ):
     save_msg = save_simple_profile_v2(profile_name, group_url, image_path, post_text)
     if save_msg.startswith("Введите") or save_msg.startswith("URL"):
@@ -491,6 +506,7 @@ def execute_v2_loop_stream(
         f"Автовступление: {'включено' if auto_join_before_post else 'выключено'}",
         f"Пауза после вступления: {max(0, int(join_cooldown_minutes * 60))} сек",
         f"Пропуск при наличии 'Предложенные': {'включено' if skip_if_unpublished_exists else 'выключено'}",
+        f"Окно повторной обработки: {max(0, float(reprocess_window_days))} дн.",
         "",
     ]
     yield "\n".join(logs)
@@ -510,7 +526,29 @@ def execute_v2_loop_stream(
             entry = urls_state.setdefault(u, {})
             entry["profile"] = profile.get("name", "")
             entry["last_cycle_started"] = cycle_no
+            entry["last_attempt_at"] = utc_now_iso()
             save_v2_loop_state(state)
+
+            # Weekly/period window: skip groups already processed recently.
+            window_days = max(0.0, float(reprocess_window_days))
+            last_processed_at = parse_iso_datetime(str(entry.get("last_processed_at", "")))
+            if window_days > 0 and last_processed_at is not None:
+                if last_processed_at.tzinfo is None:
+                    last_processed_at = last_processed_at.replace(tzinfo=timezone.utc)
+                next_allowed_at = last_processed_at + timedelta(days=window_days)
+                if datetime.now(timezone.utc) < next_allowed_at:
+                    entry["last_status"] = "skipped_recently_processed"
+                    entry["last_skip_reason"] = f"processed_within_{window_days}_days"
+                    entry["last_cycle_finished"] = cycle_no
+                    entry["last_processed_at"] = last_processed_at.isoformat()
+                    save_v2_loop_state(state)
+                    logs.append(
+                        f"[debug] Пропуск по окну {window_days} дн.: группа уже обработана недавно, "
+                        f"следующая попытка после {next_allowed_at.astimezone().strftime('%Y-%m-%d %H:%M:%S')}"
+                    )
+                    logs.append("")
+                    yield "\n".join(logs)
+                    continue
 
             step_logs: list[str] = []
             step_q: queue.Queue[str] = queue.Queue()
@@ -565,6 +603,7 @@ def execute_v2_loop_stream(
                 entry["last_status"] = "posted_ok"
                 entry["posted_ok_count"] = int(entry.get("posted_ok_count", 0)) + 1
                 entry["last_error"] = ""
+                entry["last_skip_reason"] = ""
                 logs.append(f"[debug] Группа обработана успешно: {u}")
             else:
                 entry["last_status"] = "failed"
@@ -572,6 +611,7 @@ def execute_v2_loop_stream(
                 entry["last_error"] = result[-500:]
                 logs.append(f"[debug] Ошибка обработки группы: {u}")
             entry["last_cycle_finished"] = cycle_no
+            entry["last_processed_at"] = utc_now_iso()
             save_v2_loop_state(state)
             logs.append("")
             yield "\n".join(logs)
@@ -602,6 +642,7 @@ def execute_v2_loop_stream_ui(
     cycle_pause_minutes: float,
     cycles: int,
     skip_if_unpublished_exists: bool,
+    reprocess_window_days: float,
 ):
     yield from execute_v2_loop_stream(
         profile_name=profile_name,
@@ -617,6 +658,7 @@ def execute_v2_loop_stream_ui(
         auto_join_before_post=auto_join_before_post,
         join_cooldown_minutes=join_cooldown_minutes,
         skip_if_unpublished_exists=skip_if_unpublished_exists,
+        reprocess_window_days=reprocess_window_days,
     )
 
 
@@ -1009,6 +1051,12 @@ with gr.Blocks(title="VK Auto Post") as demo:
             with gr.Row():
                 v2_cycle_pause_nb = gr.Number(label="Пауза между циклами (мин)", value=3, minimum=0, precision=1)
                 v2_cycles_nb = gr.Number(label="Количество циклов (0 = бесконечно)", value=1, minimum=0, precision=0)
+                v2_reprocess_window_days_nb = gr.Number(
+                    label="Окно повторной обработки (дни)",
+                    value=7,
+                    minimum=0,
+                    precision=1,
+                )
                 run_v2_loop_btn = gr.Button("Циклический запуск v2", variant="primary")
             clear_v2_state_btn = gr.Button("Очистить состояние v2-цикла (v2_loop_state.json)", variant="stop")
 
@@ -1129,6 +1177,7 @@ with gr.Blocks(title="VK Auto Post") as demo:
             v2_cycle_pause_nb,
             v2_cycles_nb,
             skip_unpublished_v2_cb,
+            v2_reprocess_window_days_nb,
         ],
         outputs=[logs_tb],
     )

@@ -1,0 +1,26 @@
+{
+  "profile_id": "v2_r66666__e-tgo",
+  "name": "r66666 | e-tgo",
+  "url": "https://vk.com/r66666",
+  "image_path": "C:\\Users\\admin\\Desktop\\myproject\\vk_post\\group_vk\\img\\vk_e_t_go.png",
+  "post_text": "У вас есть услуга или товар? Покажите их в Telegram-магазине.\n\ne-tgo.ru — конструктор каталога товаров и услуг внутри Telegram.\n\n👉 Перейти: e-tgo.ru\n\nВаши клиенты уже в Telegram. Просто начните.\n\nℹ️ Работает через VPN.",
+  "selectors": {
+    "open_suggest_post_button": "[data-testid=\"group_publish_block\"] button",
+    "open_suggest_post_button_candidates": [
+      "[data-testid=\"group_publish_block\"] button",
+      "button[data-testid=\"group_publish_block_button\"]",
+      "button:has-text(\"Предложить пост\")",
+      "button:has-text(\"Предложить новость\")",
+      "[role=\"button\"]:has-text(\"Предложить\")"
+    ],
+    "posting_modal": "[data-testid=\"posting_modal_box\"]",
+    "file_input": "input[data-testid=\"posting_base_screen_download_from_device\"]",
+    "message_input": "[data-testid=\"posting_base_screen_input_message\"]",
+    "suggest_button": "button[data-testid=\"posting_suggest_button\"]"
+  },
+  "timeouts": {
+    "open_page_ms": 30000,
+    "element_ms": 20000,
+    "submit_ms": 60000
+  }
+}
